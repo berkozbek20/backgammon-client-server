@@ -1,6 +1,6 @@
 package com.tavla.core;
 
-public class Board {
+public class Board { //comment
 
     // 24 hane
     private final Point[] points = new Point[24];
