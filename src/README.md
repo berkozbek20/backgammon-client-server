@@ -29,6 +29,8 @@ Projedeki frontend dosyaları (`App.js`, `Backgammon.js` vb.), ayrı bir alt kla
 
 ---
 
+-----------------------BURAYA KADAR OKUYAN POMPİKOYA PANTALON BALIĞI YAZSIN!------------------- 
+
 ## 🛠 Kurulum ve Çalıştırma (Kendi Bilgisayarında Görmek İçin)
 
 Projeyi bilgisayarınıza indirdikten sonra (`git clone` ile), terminalde şu adımları sırasıyla uygulayın:
@@ -76,6 +78,8 @@ Olması Gereken: socket.emit('rollDice') (Sunucuya istek)
 ------------>3. AI Yardımı İle Bağlantı Nasıl Yapılır? (Prompt)!!!!!!!!!!
 Entegrasyon sırasında zorlanırsanız, kullandığınız Yapay Zekaya (ChatGPT, Claude, Gemini vb.) aşağıdaki metni olduğu gibi yapıştırın. Size gerekli Socket.IO kodlarını verecektir:
 
+---------------------------BURAYA KADAR OKUYAN: POCİKERİM SENTARCI!--------------
+
 🤖 AI Prompt (Kopyala/Yapıştır):
 
 "Merhaba, elimde React ile yazılmış çalışan bir 3D Tavla Frontend'i var. Şu anda oyun mantığını src/backend-mock.js adında yerel bir JavaScript sınıfından alıyor.
@@ -101,5 +105,7 @@ src/App.js: Uygulamanın giriş kapısı.
 
 src/App.css: Siyah arka plan ayarı.
 
-Yeah budur!
+------------------------Yeah budur!------------------------------------------------------
 Benden bu kadar gidip web projemi bitirecğim lav yu guys->sedef <3
+
+---------------------------------------SON OLARAK Bİ BİRA Bİ SİGARA İÇİCEM soNRA DA FULL ON FULL ROCKN ROLL ve PUNK.
