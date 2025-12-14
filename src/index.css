@@ -1,0 +1,10 @@
+/* index.css */
+html, body, #root {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  /* Bizim 3D sahne rengiyle birebir aynı olsun (Önceki: #1a1a1a idi) */
+  background-color: #181818; 
+  overflow: hidden; /* Scroll çıkmasını engelle */
+}
