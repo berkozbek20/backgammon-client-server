@@ -1,19 +1,16 @@
 // Backgammon.js
 // ==========================================
-// 3D TAVLA FRONTEND - REACT THREE FIBER
+// WEBSOCKET BACKEND İLE ÇALIŞAN 3D TAVLA (React Three Fiber)
 // ==========================================
-// Bu bileşen oyunun tüm görselleştirmesini, animasyonlarını
-// ve kullanıcı etkileşimlerini (drag & drop) yönetir.
-// Backend-mock.js ile haberleşerek oyun durumunu günceller.
 
-import React, { useState, useRef, useMemo, useEffect } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Canvas, useFrame } from "@react-three/fiber";
 import { RoundedBox, Html, useCursor, Text } from "@react-three/drei";
 import * as THREE from "three";
-import { TavlaGame, Player } from "./backend-mock";
 
-// ================= 1. GÖRSEL AYARLAR & SABİTLER =================
-// Tahta boyutları ve taş oranları buradan ayarlanır
+import { TavlaGame, Player } from "./backend-ws";
+
+// ================= 1) SABİTLER =================
 const BOARD_SPECS = {
   width: 15,
   height: 11,
@@ -22,7 +19,6 @@ const BOARD_SPECS = {
   checkerHeight: 0.12,
 };
 
-// Renk paleti
 const COLORS = {
   board: "#eaddcf",
   frameMain: "#3b2512",
@@ -31,14 +27,25 @@ const COLORS = {
   pointLight: "#c2b091",
   checkerWhite: "#f5f5f5",
   checkerBlack: "#151515",
-  hover: "#ffaa00", // Mouse üzerine gelince parlayan renk
-  highlight: "#2ecc71", // Gidilebilecek yerleri gösteren yeşil halka
-  ghost: "rgba(255, 255, 255, 0.4)", // Sürüklerken beliren hayalet taş rengi
+  hover: "#ffaa00",
+  highlight: "#2ecc71",
 };
 
-// ================= 2. YARDIMCI FONKSİYONLAR =================
+// WS gelmeden önce güvenli başlangıç state’i
+const EMPTY_STATE = {
+  points: Array(24)
+      .fill(0)
+      .map((_, i) => ({ index: i, owner: null, count: 0 })),
+  whiteBar: 0,
+  blackBar: 0,
+  whiteOff: 0,
+  blackOff: 0,
+  dice: [],
+  winner: null,
+  currentPlayer: Player.WHITE,
+};
 
-// CanvasTexture kullanarak dinamik tavla tahtası deseni oluşturur (2D Çizim)
+// ================= 2) YARDIMCILAR =================
 const createBoardTexture = () => {
   const width = 2048;
   const height = 1600;
@@ -47,13 +54,12 @@ const createBoardTexture = () => {
   canvas.height = height;
   const ctx = canvas.getContext("2d");
 
-  // Zemin
   ctx.fillStyle = COLORS.board;
   ctx.fillRect(0, 0, width, height);
 
-  // Üçgenlerin (Points) Hesaplanması ve Çizimi
   const scaleX = width / BOARD_SPECS.width;
   const scaleY = height / BOARD_SPECS.height;
+
   const panelWidth = (BOARD_SPECS.width - BOARD_SPECS.barWidth - 1.0) / 2;
   const triWidth3D = panelWidth / 6;
   const triW = triWidth3D * scaleX;
@@ -76,7 +82,6 @@ const createBoardTexture = () => {
     ctx.fill();
   };
 
-  // Sol ve Sağ panellerdeki üçgenleri döngüyle çiz
   const startXLeft = marginX;
   const startXRight = marginX + panelWidth * scaleX + barW;
 
@@ -89,10 +94,10 @@ const createBoardTexture = () => {
     drawTri(startXRight + i * triW, true, c2);
   }
 
-  // Orta Bar ve Çerçeve
   const barCenterX = width / 2;
-  ctx.fillStyle = "#6d4c41"; // <--- Daha açık, ahşap rengi
+  ctx.fillStyle = "#6d4c41";
   ctx.fillRect(barCenterX - barW / 2, 0, barW, height);
+
   ctx.strokeStyle = "#3e2b1f";
   ctx.lineWidth = 20;
   ctx.strokeRect(0, 0, width, height);
@@ -100,12 +105,8 @@ const createBoardTexture = () => {
   return canvas;
 };
 
-// Tavla tahtasındaki 0-23 arası indekslerin 3D dünyadaki (x,z) koordinatlarını hesaplar
+// Backend index -> 3D pozisyon (senin mevcut mapping’inle uyumlu)
 const getPointBasePosition = (index) => {
-  if (index === "off") {
-    return { x: 10, zBase: 0, direction: 0, isOff: true };
-  }
-
   const { width, height, barWidth } = BOARD_SPECS;
   const margin = 0.5;
   const panelWidth = (width - barWidth - margin * 2) / 2;
@@ -113,65 +114,41 @@ const getPointBasePosition = (index) => {
   const halfTri = triWidth / 2;
   const zEdge = height / 2 - 0.7;
 
-  // Sol/Sağ ve Alt/Üst panellere göre X ve Z hesaplaması
   const leftPanelStartX = -(width / 2) + margin;
   const rightPanelStartX = barWidth / 2;
 
   if (index >= 0 && index <= 5) {
-    // Sağ Alt (Beyaz Ev)
-    return {
-      x: rightPanelStartX + (5 - index) * triWidth + halfTri,
-      zBase: zEdge,
-      direction: -1,
-    };
+    // Sağ Alt (WHITE home)
+    return { x: rightPanelStartX + (5 - index) * triWidth + halfTri, zBase: zEdge, direction: -1 };
   } else if (index >= 6 && index <= 11) {
     // Sol Alt
-    return {
-      x: leftPanelStartX + (11 - index) * triWidth + halfTri,
-      zBase: zEdge,
-      direction: -1,
-    };
+    return { x: leftPanelStartX + (11 - index) * triWidth + halfTri, zBase: zEdge, direction: -1 };
   } else if (index >= 12 && index <= 17) {
     // Sol Üst
-    return {
-      x: leftPanelStartX + (index - 12) * triWidth + halfTri,
-      zBase: -zEdge,
-      direction: 1,
-    };
+    return { x: leftPanelStartX + (index - 12) * triWidth + halfTri, zBase: -zEdge, direction: 1 };
   } else {
-    // Sağ Üst (Siyah Ev)
-    return {
-      x: rightPanelStartX + (index - 18) * triWidth + halfTri,
-      zBase: -zEdge,
-      direction: 1,
-    };
+    // Sağ Üst (BLACK home)
+    return { x: rightPanelStartX + (index - 18) * triWidth + halfTri, zBase: -zEdge, direction: 1 };
   }
 };
 
-// Taşların üst üste dizilmesi (Stacking) için Yükseklik ve Z ofseti hesaplar
 const getSlotPosition = (index, stackIndex) => {
-  if (index === "off") {
-    return { x: 9.5, z: 0, y: BOARD_SPECS.checkerHeight / 2 };
-  }
   const baseInfo = getPointBasePosition(index);
   const diameter = BOARD_SPECS.checkerRadius * 2;
   const standardSpacing = diameter + 0.05;
 
-  // 5 taştan sonra sıkıştırma (compression) uygular
   let zOffset = 0;
-  if (stackIndex < 5) {
-    zOffset = stackIndex * standardSpacing;
-  } else {
+  if (stackIndex < 5) zOffset = stackIndex * standardSpacing;
+  else {
     const compressedSpacing = standardSpacing / 2.5;
     zOffset = 4 * standardSpacing + (stackIndex - 4) * compressedSpacing;
   }
-  if (zOffset > 5.0) zOffset = 5.0; // Taşma önlemi
+  if (zOffset > 5.0) zOffset = 5.0;
 
   const z = baseInfo.zBase + zOffset * baseInfo.direction;
   return { x: baseInfo.x, z, y: BOARD_SPECS.checkerHeight / 2 };
 };
 
-// Kırılan taşların (Bar) konumu
 const getBarPosition = (color, index) => {
   const x = 0;
   const y = 0.2 + index * BOARD_SPECS.checkerHeight * 1.05;
@@ -179,7 +156,6 @@ const getBarPosition = (color, index) => {
   return [x, y, z];
 };
 
-// Toplanan taşların (Bearing Off) konumu - Sağ tarafta biriktirme
 const getOffPosition = (color, index) => {
   const x = BOARD_SPECS.width / 2 + 1.5;
   const zStart = color === Player.WHITE ? 4 : -4;
@@ -187,340 +163,263 @@ const getOffPosition = (color, index) => {
   const stackLayer = Math.floor(index / 15);
   const posInLayer = index % 15;
   const z = zStart + posInLayer * zDir * 0.35;
-  const y =
-    BOARD_SPECS.checkerHeight / 2 + stackLayer * BOARD_SPECS.checkerHeight;
+  const y = BOARD_SPECS.checkerHeight / 2 + stackLayer * BOARD_SPECS.checkerHeight;
   return [x, y, z];
 };
 
-// ================= 3. REACT THREE FIBER BİLEŞENLERİ =================
-
-// Zar üzerindeki siyah noktalar (Pips)
+// ================= 3) 3D COMPONENTS =================
 const Pip = ({ pos }) => (
-  <mesh position={pos}>
-    <cylinderGeometry args={[0.08, 0.08, 0.01, 32]} />
-    <meshStandardMaterial color="black" />
-  </mesh>
+    <mesh position={pos}>
+      <cylinderGeometry args={[0.08, 0.08, 0.01, 32]} />
+      <meshStandardMaterial color="black" />
+    </mesh>
 );
 
-// 3D Zar Bileşeni - Fiziksel yüzey haritalaması içerir
-const Dice = ({ value, position, rolling }) => {
+const Dice3D = ({ value, position, rolling }) => {
   const ref = useRef();
   const startTime = useRef(0);
 
-  // Zar değerine göre hangi yüzün yukarı bakacağını hesaplayan rotasyonlar
   const targetRot = useMemo(() => {
     switch (value) {
-      case 1:
-        return [0, 0, 0];
-      case 6:
-        return [Math.PI, 0, 0];
-      case 2:
-        return [-Math.PI / 2, 0, 0];
-      case 5:
-        return [Math.PI / 2, 0, 0];
-      case 3:
-        return [0, 0, Math.PI / 2];
-      case 4:
-        return [0, 0, -Math.PI / 2];
-      default:
-        return [0, 0, 0];
+      case 1: return [0, 0, 0];
+      case 6: return [Math.PI, 0, 0];
+      case 2: return [-Math.PI / 2, 0, 0];
+      case 5: return [Math.PI / 2, 0, 0];
+      case 3: return [0, 0, Math.PI / 2];
+      case 4: return [0, 0, -Math.PI / 2];
+      default: return [0, 0, 0];
     }
   }, [value]);
 
-  // Animasyon Döngüsü
   useFrame((state, delta) => {
     if (!ref.current) return;
-    if (rolling && startTime.current === 0)
-      startTime.current = state.clock.elapsedTime;
-    else if (!rolling) startTime.current = 0;
+
+    if (rolling && startTime.current === 0) startTime.current = state.clock.elapsedTime;
+    if (!rolling) startTime.current = 0;
 
     if (rolling) {
-      // Yuvarlanma efekti: Rastgele dönüş ve zıplama (Sinus dalgası)
       ref.current.rotation.x += delta * 15;
       ref.current.rotation.y += delta * 12;
       ref.current.rotation.z += delta * 8;
       const rollTime = state.clock.elapsedTime - startTime.current;
-      ref.current.position.y =
-        1.0 + Math.abs(Math.sin(rollTime * 10 + position[0] * 3)) * 0.5;
+      ref.current.position.y = 1.0 + Math.abs(Math.sin(rollTime * 10 + position[0] * 3)) * 0.5;
     } else {
-      // Durma efekti: Hedef rotasyona yumuşak geçiş (Lerp)
-      ref.current.position.y = THREE.MathUtils.lerp(
-        ref.current.position.y,
-        0.3,
-        delta * 10
-      );
-      ref.current.rotation.x = THREE.MathUtils.lerp(
-        ref.current.rotation.x,
-        targetRot[0],
-        delta * 10
-      );
-      ref.current.rotation.y = THREE.MathUtils.lerp(
-        ref.current.rotation.y,
-        targetRot[1],
-        delta * 10
-      );
-      ref.current.rotation.z = THREE.MathUtils.lerp(
-        ref.current.rotation.z,
-        targetRot[2],
-        delta * 10
-      );
+      ref.current.position.y = THREE.MathUtils.lerp(ref.current.position.y, 0.3, delta * 10);
+      ref.current.rotation.x = THREE.MathUtils.lerp(ref.current.rotation.x, targetRot[0], delta * 10);
+      ref.current.rotation.y = THREE.MathUtils.lerp(ref.current.rotation.y, targetRot[1], delta * 10);
+      ref.current.rotation.z = THREE.MathUtils.lerp(ref.current.rotation.z, targetRot[2], delta * 10);
     }
   });
 
   return (
-    <group position={position}>
-      <group ref={ref}>
-        <RoundedBox args={[0.6, 0.6, 0.6]} radius={0.1} castShadow>
-          <meshStandardMaterial color="white" />
-          {/* Zar Yüzleri: 1, 6, 2, 5, 3, 4 */}
-          <Pip pos={[0, 0.31, 0]} />
-          <group rotation={[Math.PI, 0, 0]}>
-            <Pip pos={[-0.18, 0.31, -0.18]} />
-            <Pip pos={[-0.18, 0.31, 0]} />
-            <Pip pos={[-0.18, 0.31, 0.18]} />
-            <Pip pos={[0.18, 0.31, -0.18]} />
-            <Pip pos={[0.18, 0.31, 0]} />
-            <Pip pos={[0.18, 0.31, 0.18]} />
-          </group>
-          <group rotation={[Math.PI / 2, 0, 0]}>
-            <Pip pos={[0, 0.31, -0.15]} />
-            <Pip pos={[0, 0.31, 0.15]} />
-          </group>
-          <group rotation={[-Math.PI / 2, 0, 0]}>
-            <Pip pos={[-0.15, 0.31, -0.15]} />
-            <Pip pos={[0.15, 0.31, 0.15]} />
+      <group position={position}>
+        <group ref={ref}>
+          <RoundedBox args={[0.6, 0.6, 0.6]} radius={0.1} castShadow>
+            <meshStandardMaterial color="white" />
             <Pip pos={[0, 0.31, 0]} />
-            <Pip pos={[-0.15, 0.31, 0.15]} />
-            <Pip pos={[0.15, 0.31, -0.15]} />
-          </group>
-          <group rotation={[0, 0, -Math.PI / 2]}>
-            <Pip pos={[-0.15, 0.31, -0.15]} />
-            <Pip pos={[0, 0.31, 0]} />
-            <Pip pos={[0.15, 0.31, 0.15]} />
-          </group>
-          <group rotation={[0, 0, Math.PI / 2]}>
-            <Pip pos={[-0.15, 0.31, -0.15]} />
-            <Pip pos={[0.15, 0.31, -0.15]} />
-            <Pip pos={[-0.15, 0.31, 0.15]} />
-            <Pip pos={[0.15, 0.31, 0.15]} />
-          </group>
-        </RoundedBox>
+            <group rotation={[Math.PI, 0, 0]}>
+              <Pip pos={[-0.18, 0.31, -0.18]} /><Pip pos={[-0.18, 0.31, 0]} /><Pip pos={[-0.18, 0.31, 0.18]} />
+              <Pip pos={[0.18, 0.31, -0.18]} /><Pip pos={[0.18, 0.31, 0]} /><Pip pos={[0.18, 0.31, 0.18]} />
+            </group>
+            <group rotation={[Math.PI / 2, 0, 0]}>
+              <Pip pos={[0, 0.31, -0.15]} /><Pip pos={[0, 0.31, 0.15]} />
+            </group>
+            <group rotation={[-Math.PI / 2, 0, 0]}>
+              <Pip pos={[-0.15, 0.31, -0.15]} /><Pip pos={[0.15, 0.31, 0.15]} /><Pip pos={[0, 0.31, 0]} />
+              <Pip pos={[-0.15, 0.31, 0.15]} /><Pip pos={[0.15, 0.31, -0.15]} />
+            </group>
+            <group rotation={[0, 0, -Math.PI / 2]}>
+              <Pip pos={[-0.15, 0.31, -0.15]} /><Pip pos={[0, 0.31, 0]} /><Pip pos={[0.15, 0.31, 0.15]} />
+            </group>
+            <group rotation={[0, 0, Math.PI / 2]}>
+              <Pip pos={[-0.15, 0.31, -0.15]} /><Pip pos={[0.15, 0.31, -0.15]} />
+              <Pip pos={[-0.15, 0.31, 0.15]} /><Pip pos={[0.15, 0.31, 0.15]} />
+            </group>
+          </RoundedBox>
+        </group>
       </group>
-    </group>
   );
 };
 
-// Taş (Checker) Bileşeni
 const Checker = ({ color, position, isTopStack, onDragStart, opacity = 1 }) => {
   const isWhite = color === Player.WHITE;
   const [hover, setHover] = useState(false);
-  // Sadece en üstteki taşlar etkileşime girebilir
   useCursor(hover && isTopStack);
 
   const mainColor = isWhite ? COLORS.checkerWhite : COLORS.checkerBlack;
   const hoverColor = hover && isTopStack ? COLORS.hover : mainColor;
 
   return (
-    <group
-      position={position}
-      onPointerOver={(e) => {
-        e.stopPropagation();
-        if (isTopStack) setHover(true);
-      }}
-      onPointerOut={() => setHover(false)}
-      onPointerDown={(e) => {
-        if (isTopStack && onDragStart) {
-          e.stopPropagation();
-          onDragStart();
-        }
-      }}
-    >
-      <mesh>
-        <cylinderGeometry
-          args={[
-            BOARD_SPECS.checkerRadius,
-            BOARD_SPECS.checkerRadius,
-            BOARD_SPECS.checkerHeight,
-            48,
-          ]}
-        />
-        <meshStandardMaterial
-          color={hoverColor}
-          roughness={0.4}
-          metalness={0.3}
-          transparent
-          opacity={opacity}
-        />
-      </mesh>
-
-      {/* Siyah Taşlar için metalik çerçeve (Rim) */}
-      {!isWhite && opacity === 1 && (
-        <mesh position={[0, 0, 0]} rotation={[Math.PI / 2, 0, 0]}>
-          <torusGeometry args={[BOARD_SPECS.checkerRadius, 0.05, 16, 48]} />
-          <meshStandardMaterial color="#666" metalness={0.8} roughness={0.2} />
+      <group
+          position={position}
+          onPointerOver={(e) => {
+            e.stopPropagation();
+            if (isTopStack) setHover(true);
+          }}
+          onPointerOut={() => setHover(false)}
+          onPointerDown={(e) => {
+            if (!isTopStack) return;
+            e.stopPropagation();
+            onDragStart?.();
+          }}
+      >
+        <mesh>
+          <cylinderGeometry args={[BOARD_SPECS.checkerRadius, BOARD_SPECS.checkerRadius, BOARD_SPECS.checkerHeight, 48]} />
+          <meshStandardMaterial color={hoverColor} roughness={0.4} metalness={0.3} transparent opacity={opacity} />
         </mesh>
-      )}
 
-      {/* İç Desen */}
-      {opacity === 1 && (
-        <mesh
-          position={[0, BOARD_SPECS.checkerHeight / 2 + 0.001, 0]}
-          rotation={[-Math.PI / 2, 0, 0]}
-        >
-          <ringGeometry
-            args={[
-              BOARD_SPECS.checkerRadius * 0.4,
-              BOARD_SPECS.checkerRadius * 0.7,
-              32,
-            ]}
-          />
-          <meshStandardMaterial
-            color={isWhite ? "#ddd" : "#333"}
-            transparent
-            opacity={0.3}
-          />
-        </mesh>
-      )}
-    </group>
+        {!isWhite && opacity === 1 && (
+            <mesh rotation={[Math.PI / 2, 0, 0]}>
+              <torusGeometry args={[BOARD_SPECS.checkerRadius, 0.05, 16, 48]} />
+              <meshStandardMaterial color="#666" metalness={0.8} roughness={0.2} />
+            </mesh>
+        )}
+      </group>
   );
 };
 
-// Gidilebilir yerleri gösteren yeşil halka
 const MoveHighlight = ({ index, boardState }) => {
   let pos;
-  if (index === "off") {
-    pos = { x: 9.5, z: 0 };
-  } else {
-    const count = boardState.points[index].count;
-    pos = getSlotPosition(index, count);
+  if (index === "off") pos = { x: 9.5, z: 0 };
+  else {
+    const count = boardState.points[index]?.count ?? 0;
+    const slot = getSlotPosition(index, count);
+    pos = { x: slot.x, z: slot.z };
   }
 
   return (
-    <group position={[pos.x, 0.03, pos.z]}>
-      <mesh rotation={[-Math.PI / 2, 0, 0]}>
-        <ringGeometry args={[0, BOARD_SPECS.checkerRadius, 32]} />
-        <meshBasicMaterial color={COLORS.highlight} opacity={0.4} transparent />
-      </mesh>
-      <mesh rotation={[-Math.PI / 2, 0, 0]}>
-        <ringGeometry
-          args={[
-            BOARD_SPECS.checkerRadius,
-            BOARD_SPECS.checkerRadius + 0.1,
-            32,
-          ]}
-        />
-        <meshBasicMaterial color={COLORS.highlight} />
-      </mesh>
-      {index === "off" && (
-        <Text
-          position={[0, 0.5, 0]}
-          fontSize={0.4}
-          color="white"
-          anchorX="center"
-          anchorY="middle"
-        >
-          TOPLA
-        </Text>
-      )}
-    </group>
+      <group position={[pos.x, 0.03, pos.z]}>
+        <mesh rotation={[-Math.PI / 2, 0, 0]}>
+          <ringGeometry args={[0, BOARD_SPECS.checkerRadius, 32]} />
+          <meshBasicMaterial color={COLORS.highlight} opacity={0.35} transparent />
+        </mesh>
+        <mesh rotation={[-Math.PI / 2, 0, 0]}>
+          <ringGeometry args={[BOARD_SPECS.checkerRadius, BOARD_SPECS.checkerRadius + 0.1, 32]} />
+          <meshBasicMaterial color={COLORS.highlight} />
+        </mesh>
+
+        {index === "off" && (
+            <Text position={[0, 0.5, 0]} fontSize={0.35} color="white" anchorX="center" anchorY="middle">
+              TOPLA
+            </Text>
+        )}
+      </group>
   );
 };
 
-// ================= 4. OYUN SAHNESİ VE MANTIK ENTEGRASYONU =================
+// ================= 4) OYUN SAHNESİ =================
 const GameScene = ({ isInteractive }) => {
-  // Backend sınıfını başlat
-  const gameRef = useRef(new TavlaGame());
-  const [boardState, setBoardState] = useState(
-    gameRef.current.getBoardSnapshot()
-  );
+  const gameRef = useRef(null);
+
+  const [boardState, setBoardState] = useState(EMPTY_STATE);
   const [rolling, setRolling] = useState(false);
-  const [visualDice, setVisualDice] = useState([]);
-  const [remainingMoves, setRemainingMoves] = useState([]);
-  const [msg, setMsg] = useState("Oyun Başlıyor...");
+
+  const [roomId, setRoomId] = useState("");
+  const [assignedPlayer, setAssignedPlayer] = useState(null); // WHITE/BLACK
+  const [joinInput, setJoinInput] = useState("");
+
+  const [msg, setMsg] = useState("Bağlanılıyor...");
   const [winner, setWinner] = useState(null);
 
-  // Drag & Drop State'leri
+  // Drag state
   const [dragging, setDragging] = useState(false);
-  const [dragItem, setDragItem] = useState(null);
+  const [dragItem, setDragItem] = useState(null); // { index, owner }
   const [dragPos, setDragPos] = useState([0, 0, 0]);
   const [validMoves, setValidMoves] = useState([]);
-  const [dropTarget, setDropTarget] = useState(null); // Hayalet taş hedefi
+  const [dropTarget, setDropTarget] = useState(null);
 
-  // Tahta dokusunu bir kez oluştur (Memoize)
   const boardTexture = useMemo(() => {
     const texture = new THREE.CanvasTexture(createBoardTexture());
     texture.anisotropy = 16;
     return texture;
   }, []);
 
-  const refresh = () => {
-    const snap = gameRef.current.getBoardSnapshot();
-    setBoardState(snap);
-    if (snap.winner) setWinner(snap.winner);
-  };
+  // 1) WS connect + event bağlama
+  useEffect(() => {
+    const game = new TavlaGame({ url: "ws://localhost:8080" });
+    gameRef.current = game;
 
-  const handleRestart = () => {
-    gameRef.current = new TavlaGame();
-    refresh();
-    setVisualDice([]);
-    setRemainingMoves([]);
-    setValidMoves([]);
-    setWinner(null);
-    setMsg("Yeni Oyun");
-  };
+    game.onState = (snap) => {
+      setBoardState(snap || EMPTY_STATE);
+      setWinner(snap?.winner ?? null);
 
-  // Zar Atma Fonksiyonu
-  const handleRoll = () => {
-    if (rolling || !isInteractive || winner) return;
-    setRolling(true);
-    setMsg("");
-    setValidMoves([]);
-    setDropTarget(null);
-
-    setTimeout(() => {
-      gameRef.current.rollDice();
-      const steps = gameRef.current.getRemainingSteps();
-
-      setVisualDice([...steps]);
-      setRemainingMoves([...steps]);
+      const pl = snap?.currentPlayer === Player.WHITE ? "BEYAZ" : "SİYAH";
+      setMsg(`Sıra: ${pl}`);
       setRolling(false);
-      refresh();
+    };
 
-      // Legal hamle kontrolü
-      const allLegalMoves = gameRef.current.getAllLegalMoves();
+    game.onError = (err) => {
+      setMsg("❌ " + err);
+      setRolling(false);
+    };
 
-      if (allLegalMoves.length === 0) {
-        const pl =
-          gameRef.current.getCurrentPlayer() === Player.WHITE
-            ? "BEYAZ"
-            : "SİYAH";
-        setMsg(`🚫 HAMLE YOK! ${pl} PAS GEÇİYOR...`);
-        // Otomatik Pas
-        gameRef.current.switchTurn();
-        setTimeout(() => {
-          setVisualDice([]);
-          setRemainingMoves([]);
-          const nextPl =
-            gameRef.current.getCurrentPlayer() === Player.WHITE
-              ? "BEYAZ"
-              : "SİYAH";
-          setMsg(`Sıra: ${nextPl}`);
-        }, 2500);
-      } else {
-        const pl =
-          gameRef.current.getCurrentPlayer() === Player.WHITE
-            ? "BEYAZ"
-            : "SİYAH";
-        setMsg(`${pl} Hamlesi`);
+    // room_created / room_joined mesajlarını adapter içinde set ediyoruz
+    // ama burada UI’ya yansıtmak için küçük polling yapalım (basit yol):
+    const t = setInterval(() => {
+      if (!gameRef.current) return;
+      if (gameRef.current.roomId && gameRef.current.roomId !== roomId) {
+        setRoomId(gameRef.current.roomId);
       }
-    }, 800);
+      if (gameRef.current.player && gameRef.current.player !== assignedPlayer) {
+        setAssignedPlayer(gameRef.current.player);
+      }
+    }, 200);
+
+    game.connect();
+    setMsg("Bağlandı. Oda oluştur veya odaya katıl.");
+
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // 2) Room actions
+  const handleCreateRoom = () => {
+    if (!gameRef.current) return;
+    gameRef.current.createRoom();
+    setMsg("Oda oluşturuluyor...");
   };
 
-  // Sürükleme Başlangıcı
+  const handleJoinRoom = () => {
+    if (!gameRef.current) return;
+    if (!joinInput.trim()) return setMsg("RoomId boş olamaz.");
+    gameRef.current.joinRoom(joinInput.trim());
+    setMsg("Odaya katılınıyor...");
+  };
+
+  // 3) Roll
+  const handleRoll = () => {
+    if (!isInteractive || rolling || winner) return;
+    if (!gameRef.current) return;
+
+    // Sadece kendi sırandaysa zar at
+    if (assignedPlayer && boardState.currentPlayer !== assignedPlayer) {
+      setMsg("Sıra sende değil.");
+      return;
+    }
+
+    // Zar zaten varsa tekrar atma
+    if ((boardState.dice?.length ?? 0) > 0) {
+      setMsg("Zarlar zaten atıldı.");
+      return;
+    }
+
+    setRolling(true);
+    gameRef.current.rollDice();
+  };
+
+  // 4) Drag start
   const onDragStart = (index, owner) => {
     if (!isInteractive || rolling || winner) return;
-    if (gameRef.current.dice.length === 0) return;
-    if (owner !== gameRef.current.getCurrentPlayer()) return;
+    if (!gameRef.current) return;
+
+    // Zar yoksa sürükleme yok
+    if ((boardState.dice?.length ?? 0) === 0) return;
+
+    // Sadece kendi assigned player'ı oynayabilir
+    if (assignedPlayer && boardState.currentPlayer !== assignedPlayer) return;
+
+    // Taş currentPlayer'a ait olmalı
+    if (owner !== boardState.currentPlayer) return;
 
     const moves = gameRef.current.getLegalMoves(index);
     if (!moves || moves.length === 0) return;
@@ -533,679 +432,273 @@ const GameScene = ({ isInteractive }) => {
     setDragPos([info.x, 2, info.zBase]);
   };
 
-  // Sürükleme Sırasında (Görünmez Zemin Üzerinde)
+  // 5) Drag move
   const onPlanePointerMove = (e) => {
-    if (dragging) {
-      setDragPos([e.point.x, 2.5, e.point.z]);
+    if (!dragging) return;
+    setDragPos([e.point.x, 2.5, e.point.z]);
 
-      // En yakın geçerli hedefi bul (Hayalet taş için)
-      let bestIdx = null;
-      let minDist = 3.0;
-      const targets = [...Array(24).keys(), "off"];
+    let bestIdx = null;
+    let minDist = 3.0;
+    const targets = [...Array(24).keys(), "off"];
 
-      for (let t of targets) {
-        let info;
-        if (t === "off") {
-          info = { x: 9.5, zBase: 0 };
-        } else {
-          info = getPointBasePosition(t);
-        }
-        const dist = Math.sqrt(
-          Math.pow(e.point.x - info.x, 2) + Math.pow(e.point.z - info.zBase, 2)
-        );
+    for (let t of targets) {
+      let info;
+      if (t === "off") info = { x: 9.5, zBase: 0 };
+      else info = getPointBasePosition(t);
 
-        if (dist < 2.5 && validMoves.includes(t)) {
-          if (dist < minDist) {
-            minDist = dist;
-            bestIdx = t;
-          }
+      const dist = Math.sqrt((e.point.x - info.x) ** 2 + (e.point.z - info.zBase) ** 2);
+
+      if (dist < 2.5 && validMoves.includes(t)) {
+        if (dist < minDist) {
+          minDist = dist;
+          bestIdx = t;
         }
       }
-      setDropTarget(bestIdx);
     }
+    setDropTarget(bestIdx);
   };
 
-  // Sürükleme Bitişi (Bırakma)
-  const onPointerUp = (e) => {
+  // 6) Drop
+  const onPointerUp = () => {
     if (!dragging) return;
     setDragging(false);
 
-    if (dropTarget !== null && dragItem) {
-      let step = 0;
+    if (dropTarget !== null && dragItem && gameRef.current) {
       const bestIdx = dropTarget;
 
-      // Hamle mesafesini (zar değerini) hesapla
+      // step hesapla (mock'taki gibi)
+      let step = 0;
       if (bestIdx === "off") {
-        const distanceNeeded =
-          gameRef.current.getCurrentPlayer() === Player.WHITE
-            ? 24 - dragItem.index
-            : dragItem.index - -1;
-        const dice = gameRef.current.getRemainingSteps();
-        if (dice.includes(distanceNeeded)) step = distanceNeeded;
-        else step = dice.find((d) => d >= distanceNeeded) || dice[0];
+        // Şimdilik adapter highlight "off" gösterebilir ama backend MovePayload int bekliyorsa
+        // off hamlesini göndermiyoruz. (Bearing off WS DTO’su sonra genişletilecek)
+        setMsg("Bearing off henüz WS tarafında tamamlanmadı.");
       } else {
-        if (gameRef.current.getCurrentPlayer() === Player.WHITE) {
-          step = dragItem.index - bestIdx;
-        } else {
-          step = bestIdx - dragItem.index;
-        }
-      }
+        if (boardState.currentPlayer === Player.WHITE) step = dragItem.index - bestIdx;
+        else step = bestIdx - dragItem.index;
 
-      // Backend'e hamleyi işlet
-      const success = gameRef.current.applyMove(dragItem.index, bestIdx, step);
-      if (success) {
-        refresh();
-        const newRemaining = [...gameRef.current.getRemainingSteps()];
-        setRemainingMoves(newRemaining);
-        setVisualDice(newRemaining);
-
-        // Zarlar bittiyse sıra değiştir
-        if (gameRef.current.dice.length === 0) {
-          gameRef.current.switchTurn();
-          setTimeout(() => {
-            setVisualDice([]);
-            setRemainingMoves([]);
-            const nextPl =
-              gameRef.current.getCurrentPlayer() === Player.WHITE
-                ? "BEYAZ"
-                : "SİYAH";
-            setMsg(`Sıra: ${nextPl}`);
-          }, 1000);
-        }
+        // Server'a gönder (state server'dan gelecek)
+        gameRef.current.applyMove(dragItem.index, bestIdx, step);
       }
     }
+
     setDragItem(null);
     setValidMoves([]);
     setDropTarget(null);
   };
 
-  const isDiceDisabled = rolling || remainingMoves.length > 0 || winner;
-  const curPlayerName =
-    gameRef.current.getCurrentPlayer() === Player.WHITE ? "BEYAZ" : "SİYAH";
+  const isDiceDisabled =
+      rolling ||
+      winner ||
+      (boardState.dice?.length ?? 0) > 0 ||
+      (assignedPlayer && boardState.currentPlayer !== assignedPlayer);
 
-  // Hayalet taşın nerede duracağını hesapla
+  const curPlayerName = boardState.currentPlayer === Player.WHITE ? "BEYAZ" : "SİYAH";
+
   const getGhostPosition = () => {
     if (dropTarget === null) return [0, -10, 0];
     if (dropTarget === "off") return [9.5, 0.5, 0];
 
-    const count = boardState.points[dropTarget].count;
+    const count = boardState.points[dropTarget]?.count ?? 0;
     const pos = getSlotPosition(dropTarget, count);
     return [pos.x, pos.y, pos.z];
   };
 
+  // ================= RENDER =================
   return (
-    <>
-      {/* --- ARKA PLAN RENGİNİ BURADAN DEĞİŞTİRDİM --- */}
-      <color attach="background" args={["#e0d6c8"]} />
+      <>
+        <color attach="background" args={["#e0d6c8"]} />
 
-      <ambientLight intensity={0.6} />
-      <directionalLight position={[10, 20, 10]} intensity={1.0} castShadow />
-      <spotLight position={[-10, 20, 0]} intensity={0.5} />
+        <ambientLight intensity={0.6} />
+        <directionalLight position={[10, 20, 10]} intensity={1.0} castShadow />
+        <spotLight position={[-10, 20, 0]} intensity={0.5} />
 
-      {/* Sürükleme Zemini (Görünmez) */}
-      {dragging && (
-        <mesh
-          rotation={[-Math.PI / 2, 0, 0]}
-          position={[0, 0, 0]}
-          visible={false}
-          onPointerMove={onPlanePointerMove}
-          onPointerUp={onPointerUp}
-        >
-          <planeGeometry args={[50, 50]} />
-          <meshBasicMaterial />
-        </mesh>
-      )}
-
-      {/* Oyun Alanı Objeleri */}
-      <group onPointerUp={dragging ? null : onPointerUp}>
-        {/* Tahta Gövdesi */}
-        <RoundedBox
-          args={[BOARD_SPECS.width + 1.2, 1.2, BOARD_SPECS.height + 1.2]}
-          position={[0, -0.62, 0]}
-          radius={0.2}
-          receiveShadow
-        >
-          <meshStandardMaterial color={COLORS.frameMain} />
-        </RoundedBox>
-        <mesh
-          rotation={[-Math.PI / 2, 0, 0]}
-          position={[0, 0, 0]}
-          receiveShadow
-        >
-          <planeGeometry args={[BOARD_SPECS.width, BOARD_SPECS.height]} />
-          <meshStandardMaterial
-            map={boardTexture}
-            roughness={0.6}
-            metalness={0.0}
-          />
-        </mesh>
-
-        {/* Çerçeve Kenarları */}
-        <RoundedBox
-          args={[BOARD_SPECS.width + 1.2, 0.4, 0.6]}
-          position={[0, 0.2, -BOARD_SPECS.height / 2 - 0.3]}
-          radius={0.1}
-        >
-          <meshStandardMaterial color={COLORS.frameRim} />
-        </RoundedBox>
-        <RoundedBox
-          args={[BOARD_SPECS.width + 1.2, 0.4, 0.6]}
-          position={[0, 0.2, BOARD_SPECS.height / 2 + 0.3]}
-          radius={0.1}
-        >
-          <meshStandardMaterial color={COLORS.frameRim} />
-        </RoundedBox>
-        <RoundedBox
-          args={[0.6, 0.4, BOARD_SPECS.height]}
-          position={[-BOARD_SPECS.width / 2 - 0.3, 0.2, 0]}
-          radius={0.1}
-        >
-          <meshStandardMaterial color={COLORS.frameRim} />
-        </RoundedBox>
-        <RoundedBox
-          args={[0.6, 0.4, BOARD_SPECS.height]}
-          position={[BOARD_SPECS.width / 2 + 0.3, 0.2, 0]}
-          radius={0.1}
-        >
-          <meshStandardMaterial color={COLORS.frameRim} />
-        </RoundedBox>
-        <mesh position={[0, 0.05, 0]}>
-          <boxGeometry
-            args={[BOARD_SPECS.barWidth, 0.15, BOARD_SPECS.height]}
-          />
-          <meshStandardMaterial color="#704f3a" />
-        </mesh>
-        {/* Zarların Render Edilmesi */}
-        {visualDice.map((dVal, i) => (
-          <Dice
-            key={`dice-${i}`}
-            value={dVal}
-            position={[-1.5 + i * 1.0, 0.6, 0]}
-            rolling={rolling}
-          />
-        ))}
-
-        {/* Kırık Taşların Render Edilmesi */}
-        {Array.from({ length: boardState.whiteBar }).map((_, i) => (
-          <Checker
-            key={`wb-${i}`}
-            color={Player.WHITE}
-            position={getBarPosition(Player.WHITE, i)}
-            isTopStack={false}
-          />
-        ))}
-        {Array.from({ length: boardState.blackBar }).map((_, i) => (
-          <Checker
-            key={`bb-${i}`}
-            color={Player.BLACK}
-            position={getBarPosition(Player.BLACK, i)}
-            isTopStack={false}
-          />
-        ))}
-
-        {/* Toplanan Taşların Render Edilmesi */}
-        {Array.from({ length: boardState.whiteOff }).map((_, i) => (
-          <Checker
-            key={`wo-${i}`}
-            color={Player.WHITE}
-            position={getOffPosition(Player.WHITE, i)}
-            isTopStack={false}
-          />
-        ))}
-        {Array.from({ length: boardState.blackOff }).map((_, i) => (
-          <Checker
-            key={`bo-${i}`}
-            color={Player.BLACK}
-            position={getOffPosition(Player.BLACK, i)}
-            isTopStack={false}
-          />
-        ))}
-
-        {/* Hamle Hedeflerinin Gösterilmesi */}
-        {validMoves.map((idx) => (
-          <MoveHighlight
-            key={`hl-${idx}`}
-            index={idx}
-            boardState={boardState}
-          />
-        ))}
-
-        {/* Hayalet Taş (Drop Preview) */}
-        {dragging && dropTarget !== null && dragItem && (
-          <Checker
-            color={dragItem.owner}
-            position={getGhostPosition()}
-            isTopStack={false}
-            opacity={0.5}
-          />
+        {/* Sürükleme Zemini */}
+        {dragging && (
+            <mesh
+                rotation={[-Math.PI / 2, 0, 0]}
+                position={[0, 0, 0]}
+                visible={false}
+                onPointerMove={onPlanePointerMove}
+                onPointerUp={onPointerUp}
+            >
+              <planeGeometry args={[50, 50]} />
+              <meshBasicMaterial />
+            </mesh>
         )}
 
-        {/* Tahta Üzerindeki Tüm Taşlar */}
-        {boardState.points.map((p) => {
-          const items = [];
-          for (let i = 0; i < p.count; i++) {
-            const isTop = i === p.count - 1;
-            // Sürüklenen taşı yerde gösterme
-            if (dragging && dragItem?.index === p.index && isTop) continue;
-
-            const pos = getSlotPosition(p.index, i);
-            const yPos = BOARD_SPECS.checkerHeight / 2 + i * 0.005;
-
-            items.push(
-              <Checker
-                key={`pt-${p.index}-${i}-${p.owner}`}
-                color={p.owner}
-                position={[pos.x, yPos, pos.z]}
-                isTopStack={isTop}
-                onDragStart={() => onDragStart(p.index, p.owner)}
-              />
-            );
-          }
-          return <group key={p.index}>{items}</group>;
-        })}
-
-        {/* Aktif Sürüklenen Taş */}
-        {dragging && dragItem && (
-          <Checker
-            color={dragItem.owner}
-            position={dragPos}
-            isTopStack={false}
-          />
-        )}
-      </group>
-
-      {/* 2D UI Katmanı (HTML Overlay) */}
-      <Html fullscreen style={{ pointerEvents: "none" }}>
-        <div
-          style={{
-            position: "absolute",
-            top: "25px",
-            left: "30px",
-            pointerEvents: "auto",
-            display: "flex",
-            flexDirection: "column",
-            alignItems: "flex-start",
-            gap: "8px",
-          }}
-        >
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "12px",
-              background: "rgba(0,0,0,0.6)",
-              padding: "8px 16px",
-              borderRadius: "12px",
-              border: "1px solid rgba(255,255,255,0.1)",
-            }}
+        <group onPointerUp={dragging ? null : onPointerUp}>
+          {/* Board body */}
+          <RoundedBox
+              args={[BOARD_SPECS.width + 1.2, 1.2, BOARD_SPECS.height + 1.2]}
+              position={[0, -0.62, 0]}
+              radius={0.2}
+              receiveShadow
           >
-            <div style={{ fontSize: "32px" }}>🎲</div>
-            <div style={{ display: "flex", flexDirection: "column" }}>
-              <span
-                style={{
-                  color: "white",
-                  fontWeight: "bold",
-                  fontSize: "24px",
-                  letterSpacing: "1px",
-                  textTransform: "uppercase",
-                }}
-              >
-                TAVLA OYUNU
-              </span>
-            </div>
-          </div>
-          <div style={{ display: "flex", gap: "5px" }}>
-            <button
-              onClick={handleRestart}
-              style={{
-                background: "#e74c3c",
-                color: "white",
-                border: "none",
-                padding: "10px 20px",
-                borderRadius: "8px",
-                cursor: "pointer",
-                fontWeight: "bold",
-                fontSize: "14px",
-                boxShadow: "0 2px 5px rgba(0,0,0,0.3)",
-              }}
-            >
-              YENİ OYUN
-            </button>
-          </div>
-        </div>
+            <meshStandardMaterial color={COLORS.frameMain} />
+          </RoundedBox>
 
-        {/* Kalan Zarlar Göstergesi */}
-        {remainingMoves.length > 0 && (
-          <div
-            style={{
-              position: "absolute",
-              top: "50%",
-              right: "60px",
-              transform: "translate(0, -50%)",
-              background: "rgba(0,0,0,0.7)",
-              padding: "20px",
-              borderRadius: "16px",
-              color: "white",
-              textAlign: "center",
-              border: "1px solid rgba(255,255,255,0.2)",
-            }}
-          >
-            <div
-              style={{
-                fontSize: "14px",
-                marginBottom: "8px",
-                color: "#ddd",
-                textTransform: "uppercase",
-              }}
-            >
-              Kalan Zarlar
-            </div>
-            {remainingMoves.map((m, i) => (
-              <span
-                key={i}
-                style={{
-                  display: "inline-block",
-                  width: "36px",
-                  height: "36px",
-                  lineHeight: "36px",
-                  background: "#f1c40f",
-                  color: "#111",
-                  margin: "4px",
-                  borderRadius: "6px",
-                  fontWeight: "800",
-                  fontSize: "20px",
-                  boxShadow: "0 3px 6px rgba(0,0,0,0.4)",
-                }}
-              >
-                {m}
-              </span>
-            ))}
-          </div>
-        )}
+          <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, 0]} receiveShadow>
+            <planeGeometry args={[BOARD_SPECS.width, BOARD_SPECS.height]} />
+            <meshStandardMaterial map={boardTexture} roughness={0.6} metalness={0.0} />
+          </mesh>
 
-        {/* Chat Alanı */}
-        <div
-          style={{
-            position: "absolute",
-            bottom: "100px",
-            left: "20px",
-            background: "rgba(30, 20, 10, 0.85)",
-            backdropFilter: "blur(10px)",
-            padding: "0",
-            borderRadius: "12px",
-            border: "1px solid rgba(243, 156, 18, 0.3)",
-            color: "#eee",
-            width: "280px",
-            height: "350px",
-            boxShadow: "0 8px 32px rgba(0,0,0,0.5)",
-            display: "flex",
-            flexDirection: "column",
-            pointerEvents: "auto",
-            overflow: "hidden",
-            fontFamily: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif",
-          }}
-        >
-          <div
-            style={{
-              padding: "12px 15px",
-              background: "rgba(243, 156, 18, 0.15)",
-              borderBottom: "1px solid rgba(243, 156, 18, 0.2)",
-              display: "flex",
-              alignItems: "center",
-              gap: "8px",
-            }}
-          >
-            <span style={{ fontSize: "18px" }}>💬</span>
-            <span
-              style={{
-                fontWeight: "600",
-                color: "#f39c12",
-                letterSpacing: "0.5px",
-              }}
-            >
-              Oyun Sohbeti
-            </span>
-          </div>
-          <div
-            style={{
-              flexGrow: 1,
-              overflowY: "auto",
-              padding: "15px",
-              display: "flex",
-              flexDirection: "column",
-              gap: "10px",
-            }}
-          >
-            <div style={{ alignSelf: "flex-start", maxWidth: "85%" }}>
-              <div
-                style={{
-                  fontSize: "11px",
-                  color: "#aaa",
-                  marginBottom: "2px",
-                  marginLeft: "4px",
-                }}
-              >
-                Rakip
+          {/* Bar */}
+          <mesh position={[0, 0.05, 0]}>
+            <boxGeometry args={[BOARD_SPECS.barWidth, 0.15, BOARD_SPECS.height]} />
+            <meshStandardMaterial color="#704f3a" />
+          </mesh>
+
+          {/* Dice (state.dice: remainingSteps) */}
+          {(boardState.dice ?? []).slice(0, 4).map((dVal, i) => (
+              <Dice3D key={`dice-${i}`} value={dVal} position={[-1.5 + i * 1.0, 0.6, 0]} rolling={rolling} />
+          ))}
+
+          {/* Bar checkers */}
+          {Array.from({ length: boardState.whiteBar }).map((_, i) => (
+              <Checker key={`wb-${i}`} color={Player.WHITE} position={getBarPosition(Player.WHITE, i)} isTopStack={false} />
+          ))}
+          {Array.from({ length: boardState.blackBar }).map((_, i) => (
+              <Checker key={`bb-${i}`} color={Player.BLACK} position={getBarPosition(Player.BLACK, i)} isTopStack={false} />
+          ))}
+
+          {/* Off checkers */}
+          {Array.from({ length: boardState.whiteOff }).map((_, i) => (
+              <Checker key={`wo-${i}`} color={Player.WHITE} position={getOffPosition(Player.WHITE, i)} isTopStack={false} />
+          ))}
+          {Array.from({ length: boardState.blackOff }).map((_, i) => (
+              <Checker key={`bo-${i}`} color={Player.BLACK} position={getOffPosition(Player.BLACK, i)} isTopStack={false} />
+          ))}
+
+          {/* Highlights */}
+          {validMoves.map((idx) => (
+              <MoveHighlight key={`hl-${idx}`} index={idx} boardState={boardState} />
+          ))}
+
+          {/* Ghost */}
+          {dragging && dropTarget !== null && dragItem && (
+              <Checker color={dragItem.owner} position={getGhostPosition()} isTopStack={false} opacity={0.5} />
+          )}
+
+          {/* Points */}
+          {boardState.points.map((p) => {
+            const items = [];
+            for (let i = 0; i < p.count; i++) {
+              const isTop = i === p.count - 1;
+              if (dragging && dragItem?.index === p.index && isTop) continue;
+
+              const pos = getSlotPosition(p.index, i);
+              const yPos = BOARD_SPECS.checkerHeight / 2 + i * 0.005;
+
+              items.push(
+                  <Checker
+                      key={`pt-${p.index}-${i}-${p.owner}`}
+                      color={p.owner}
+                      position={[pos.x, yPos, pos.z]}
+                      isTopStack={isTop}
+                      onDragStart={() => onDragStart(p.index, p.owner)}
+                  />
+              );
+            }
+            return <group key={p.index}>{items}</group>;
+          })}
+
+          {/* Dragged checker */}
+          {dragging && dragItem && <Checker color={dragItem.owner} position={dragPos} isTopStack={false} />}
+        </group>
+
+        {/* UI Overlay */}
+        <Html fullscreen style={{ pointerEvents: "none" }}>
+          <div style={{ position: "absolute", top: 20, left: 20, pointerEvents: "auto", color: "white" }}>
+            <div style={{ background: "rgba(0,0,0,0.6)", padding: 12, borderRadius: 12, width: 340 }}>
+              <div style={{ fontWeight: 800, fontSize: 18 }}>Tavla (WebSocket)</div>
+              <div style={{ marginTop: 6, fontSize: 13, opacity: 0.9 }}>
+                {msg} — <b>{curPlayerName}</b>
               </div>
-              <div
-                style={{
-                  background: "rgba(255, 255, 255, 0.1)",
-                  padding: "8px 12px",
-                  borderRadius: "12px 12px 12px 2px",
-                  fontSize: "13px",
-                  lineHeight: "1.4",
-                }}
-              >
-                Selam! Hazır mısın?
+
+              <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <button
+                    onClick={handleCreateRoom}
+                    style={{ padding: "8px 12px", borderRadius: 8, border: "none", cursor: "pointer" }}
+                >
+                  Oda Oluştur
+                </button>
+
+                <input
+                    value={joinInput}
+                    onChange={(e) => setJoinInput(e.target.value)}
+                    placeholder="RoomId"
+                    style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid #444", width: 140 }}
+                />
+                <button
+                    onClick={handleJoinRoom}
+                    style={{ padding: "8px 12px", borderRadius: 8, border: "none", cursor: "pointer" }}
+                >
+                  Katıl
+                </button>
               </div>
-            </div>
-            <div style={{ alignSelf: "flex-end", maxWidth: "85%" }}>
-              <div
-                style={{
-                  background: "linear-gradient(135deg, #d35400, #e67e22)",
-                  color: "white",
-                  padding: "8px 12px",
-                  borderRadius: "12px 12px 2px 12px",
-                  fontSize: "13px",
-                  lineHeight: "1.4",
-                  boxShadow: "0 2px 5px rgba(0,0,0,0.2)",
-                }}
-              >
-                Her zaman! Bol şans.
+
+              <div style={{ marginTop: 10, fontSize: 13 }}>
+                <div>RoomId: <b>{roomId || "-"}</b></div>
+                <div>Sen: <b>{assignedPlayer || "-"}</b></div>
+              </div>
+
+              <div style={{ marginTop: 10 }}>
+                <button
+                    onClick={handleRoll}
+                    disabled={isDiceDisabled}
+                    style={{
+                      padding: "10px 16px",
+                      borderRadius: 10,
+                      border: "none",
+                      cursor: isDiceDisabled ? "not-allowed" : "pointer",
+                      background: isDiceDisabled ? "#555" : "linear-gradient(135deg,#f39c12,#d35400)",
+                      color: "white",
+                      fontWeight: 800,
+                    }}
+                >
+                  ZAR AT
+                </button>
+              </div>
+
+              <div style={{ marginTop: 10, fontSize: 13 }}>
+                Zarlar: <b>{(boardState.dice ?? []).join(", ") || "-"}</b>
               </div>
             </div>
           </div>
-          <div
-            style={{
-              padding: "10px",
-              background: "rgba(0,0,0,0.2)",
-              borderTop: "1px solid rgba(255,255,255,0.05)",
-              display: "flex",
-              gap: "8px",
-            }}
-          >
-            <input
-              type="text"
-              placeholder="Mesaj yazın..."
-              style={{
-                flexGrow: 1,
-                padding: "10px 12px",
-                borderRadius: "20px",
-                border: "1px solid rgba(255,255,255,0.1)",
-                background: "rgba(0,0,0,0.3)",
-                color: "white",
-                outline: "none",
-                fontSize: "13px",
-              }}
-              onFocus={(e) => (e.target.style.borderColor = "#f39c12")}
-              onBlur={(e) =>
-                (e.target.style.borderColor = "rgba(255,255,255,0.1)")
-              }
-            />
-            <button
-              style={{
-                width: "38px",
-                height: "38px",
-                borderRadius: "50%",
-                border: "none",
-                background: "linear-gradient(135deg, #f39c12, #d35400)",
-                color: "white",
-                cursor: "pointer",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                boxShadow: "0 2px 5px rgba(0,0,0,0.3)",
-                fontSize: "14px",
-              }}
-            >
-              ➤
-            </button>
-          </div>
-        </div>
 
-        {/* Bitiş Ekranı */}
-        {winner && (
-          <div
-            style={{
-              position: "absolute",
-              top: 0,
-              left: 0,
-              width: "100%",
-              height: "100%",
-              background: "rgba(0,0,0,0.85)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              pointerEvents: "auto",
-              zIndex: 999,
-            }}
-          >
-            <div style={{ textAlign: "center", animation: "fadeIn 0.5s" }}>
-              <h1
-                style={{
-                  color: winner === Player.WHITE ? "#fff" : "#aaa",
-                  fontSize: "60px",
-                  marginBottom: "10px",
-                  textShadow: "0 0 20px rgba(255,255,255,0.5)",
-                }}
+          {winner && (
+              <div
+                  style={{
+                    position: "absolute",
+                    inset: 0,
+                    background: "rgba(0,0,0,0.85)",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    pointerEvents: "auto",
+                  }}
               >
-                {winner === Player.WHITE
-                  ? "BEYAZ KAZANDI! 🎉"
-                  : "SİYAH KAZANDI! 🎉"}
-              </h1>
-              <p
-                style={{
-                  color: "#ddd",
-                  fontSize: "20px",
-                  marginBottom: "30px",
-                }}
-              >
-                Harika bir oyundu!
-              </p>
-              <button
-                onClick={handleRestart}
-                style={{
-                  padding: "15px 40px",
-                  fontSize: "20px",
-                  background: "linear-gradient(to right, #e74c3c, #c0392b)",
-                  color: "white",
-                  border: "none",
-                  borderRadius: "50px",
-                  cursor: "pointer",
-                  boxShadow: "0 5px 15px rgba(231, 76, 60, 0.4)",
-                  transition: "transform 0.2s",
-                }}
-                onMouseOver={(e) => (e.target.style.transform = "scale(1.05)")}
-                onMouseOut={(e) => (e.target.style.transform = "scale(1)")}
-              >
-                TEKRAR OYNA
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Alt Bilgi Barı */}
-        <div
-          style={{
-            position: "absolute",
-            bottom: "30px",
-            width: "100%",
-            display: "flex",
-            flexDirection: "column",
-            alignItems: "center",
-            pointerEvents: "none",
-          }}
-        >
-          <div
-            style={{
-              background: "rgba(20, 20, 20, 0.9)",
-              color: "#fff",
-              padding: "12px 30px",
-              borderRadius: "50px",
-              pointerEvents: "auto",
-              textAlign: "center",
-              boxShadow: "0 10px 25px rgba(0,0,0,0.5)",
-              display: "flex",
-              alignItems: "center",
-              gap: "20px",
-              border: "1px solid rgba(255,255,255,0.15)",
-              backdropFilter: "blur(8px)",
-            }}
-          >
-            <span
-              style={{
-                fontSize: "1.2em",
-                fontWeight: "bold",
-                color: "#f39c12",
-                minWidth: "140px",
-              }}
-            >
-              {msg || `Sıra: ${curPlayerName}`}
-            </span>
-            <div
-              style={{
-                width: "1px",
-                height: "25px",
-                background: "rgba(255,255,255,0.2)",
-              }}
-            ></div>
-            <button
-              onClick={handleRoll}
-              disabled={isDiceDisabled}
-              style={{
-                padding: "10px 30px",
-                background: isDiceDisabled
-                  ? "#555"
-                  : "linear-gradient(135deg, #f39c12, #d35400)",
-                color: isDiceDisabled ? "#aaa" : "#fff",
-                border: "none",
-                borderRadius: "25px",
-                cursor: isDiceDisabled ? "default" : "pointer",
-                fontWeight: "bold",
-                fontSize: "16px",
-                letterSpacing: "1px",
-                boxShadow: isDiceDisabled
-                  ? "none"
-                  : "0 4px 10px rgba(243, 156, 18, 0.4)",
-                transition: "all 0.2s ease",
-                opacity: isDiceDisabled ? 0.7 : 1,
-              }}
-            >
-              ZAR AT
-            </button>
-          </div>
-        </div>
-      </Html>
-    </>
+                <div style={{ textAlign: "center" }}>
+                  <div style={{ fontSize: 48, fontWeight: 900, color: "white" }}>
+                    {winner === Player.WHITE ? "BEYAZ KAZANDI!" : "SİYAH KAZANDI!"}
+                  </div>
+                  <div style={{ marginTop: 10, color: "#ddd" }}>
+                    Backend winner gönderdi.
+                  </div>
+                </div>
+              </div>
+          )}
+        </Html>
+      </>
   );
 };
 
-// Açılış Animasyonu (Sinematik Kamera)
+// Açılış kamera animasyonu (kısa)
 const OpeningCinematic = ({ onComplete }) => {
   const progress = useRef(0);
   useFrame((state, delta) => {
     if (progress.current < 1) {
-      progress.current += delta / 2.0;
+      progress.current += delta / 1.6;
       if (progress.current >= 1) {
         progress.current = 1;
         onComplete?.();
@@ -1213,9 +706,9 @@ const OpeningCinematic = ({ onComplete }) => {
       const p = progress.current;
       const ease = 1 - Math.pow(1 - p, 4);
       state.camera.position.set(
-        0,
-        THREE.MathUtils.lerp(8, 20, ease),
-        THREE.MathUtils.lerp(24, 0.1, ease)
+          0,
+          THREE.MathUtils.lerp(8, 20, ease),
+          THREE.MathUtils.lerp(24, 0.1, ease)
       );
       state.camera.lookAt(0, 0, 0);
     }
@@ -1223,17 +716,16 @@ const OpeningCinematic = ({ onComplete }) => {
   return null;
 };
 
-// Ana Bileşen Export
 const Backgammon = () => {
   const [canPlay, setCanPlay] = useState(false);
 
   return (
-    <div style={{ width: "100vw", height: "100vh", background: "#181818" }}>
-      <Canvas shadows camera={{ position: [0, 8, 24], fov: 45 }}>
-        {!canPlay && <OpeningCinematic onComplete={() => setCanPlay(true)} />}
-        <GameScene isInteractive={canPlay} />
-      </Canvas>
-    </div>
+      <div style={{ width: "100vw", height: "100vh", background: "#181818" }}>
+        <Canvas shadows camera={{ position: [0, 8, 24], fov: 45 }}>
+          {!canPlay && <OpeningCinematic onComplete={() => setCanPlay(true)} />}
+          <GameScene isInteractive={canPlay} />
+        </Canvas>
+      </div>
   );
 };
 
