@@ -6,8 +6,19 @@
 export const Player = { WHITE: "WHITE", BLACK: "BLACK" };
 
 export class TavlaGame {
-    constructor({ url = "ws://localhost:8080" } = {}) {
-        this.url = url;
+    constructor({ url } = {}) {
+        // Eğer özel bir url verilmediyse, tarayıcıda çalışıyorsak otomatik olarak
+        // aynı host + /ws path'i kullan (https -> wss). Bu sayede domain veya IP ile
+        // frontend'i sunup backend'i /ws ile proxy'leyerek çalıştırmak kolaylaşır.
+        if (url) {
+            this.url = url;
+        } else if (typeof window !== 'undefined') {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            this.url = `${protocol}//${window.location.host}/ws`;
+        } else {
+            // Node ortamı veya testlerde fallback
+            this.url = 'ws://localhost:8080';
+        }
 
         this.ws = null;
 

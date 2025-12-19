@@ -1,5 +1,18 @@
 plugins {
     id("java")
+    id("com.github.johnrengelman.shadow") version "8.1.1"
+}
+
+// Shadow plugin will create a runnable fat-jar (build/libs/*all.jar)
+
+import com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar
+
+// Ensure the shadowJar produces a jar with correct Main-Class
+tasks.withType<ShadowJar> {
+    archiveBaseName.set("tavla-server")
+    manifest {
+        attributes["Main-Class"] = "com.tavla.server.ws.TavlaWebSocketServer"
+    }
 }
 
 group = "com.tavla"
