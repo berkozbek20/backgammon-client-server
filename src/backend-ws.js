@@ -208,6 +208,24 @@ function computeLegalMovesFromSnapshot(snapshot, fromIndex) {
     const current = snapshot.currentPlayer;
     const direction = current === Player.WHITE ? -1 : 1;
     const canOff = canBearOff(snapshot, current);
+    const hasBar = (current === Player.WHITE ? snapshot.whiteBar : snapshot.blackBar) > 0;
+
+    // Bar'da taş varsa sadece bar'dan hamle dene, diğer taşlar kilitlenir
+    if (hasBar && fromIndex !== "bar") return moves;
+
+    // Bar giriş noktalarını hesapla
+    if (fromIndex === "bar") {
+        for (const die of uniqueDice) {
+            const targetIdx = current === Player.WHITE ? 24 - die : die - 1;
+            if (targetIdx >= 0 && targetIdx <= 23) {
+                const target = snapshot.points[targetIdx];
+                if (!target.owner || target.owner === current || target.count === 1) {
+                    moves.push(targetIdx);
+                }
+            }
+        }
+        return moves;
+    }
 
     const fromPoint = snapshot.points[fromIndex];
     if (!fromPoint || fromPoint.owner !== current || fromPoint.count <= 0) return moves;

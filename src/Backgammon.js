@@ -418,6 +418,11 @@ const GameScene = ({ isInteractive }) => {
     // Sadece kendi assigned player'ı oynayabilir
     if (assignedPlayer && boardState.currentPlayer !== assignedPlayer) return;
 
+    // Bar'da taş varsa tahta üstü taşları kilitle
+    const hasBar =
+        (boardState.currentPlayer === Player.WHITE ? boardState.whiteBar : boardState.blackBar) > 0;
+    if (hasBar) return;
+
     // Taş currentPlayer'a ait olmalı
     if (owner !== boardState.currentPlayer) return;
 
@@ -430,6 +435,28 @@ const GameScene = ({ isInteractive }) => {
 
     const info = getPointBasePosition(index);
     setDragPos([info.x, 2, info.zBase]);
+  };
+
+  // 4-b) Bar'daki taşı sürüklemeye başlat
+  const onBarDragStart = (owner) => {
+    if (!isInteractive || rolling || winner) return;
+    if (!gameRef.current) return;
+    if ((boardState.dice?.length ?? 0) === 0) return;
+    if (assignedPlayer && boardState.currentPlayer !== assignedPlayer) return;
+    if (owner !== boardState.currentPlayer) return;
+
+    const barCount = owner === Player.WHITE ? boardState.whiteBar : boardState.blackBar;
+    if (barCount <= 0) return;
+
+    const moves = gameRef.current.getLegalMoves("bar");
+    if (!moves || moves.length === 0) return;
+
+    setValidMoves(moves);
+    setDragging(true);
+    setDragItem({ index: "bar", owner });
+
+    const pos = getBarPosition(owner, barCount - 1);
+    setDragPos([pos[0], pos[1], pos[2]]);
   };
 
   // 5) Drag move
@@ -473,8 +500,14 @@ const GameScene = ({ isInteractive }) => {
         // off hamlesini göndermiyoruz. (Bearing off WS DTO’su sonra genişletilecek)
         setMsg("Bearing off henüz WS tarafında tamamlanmadı.");
       } else {
-        if (boardState.currentPlayer === Player.WHITE) step = dragItem.index - bestIdx;
-        else step = bestIdx - dragItem.index;
+        if (dragItem.index === "bar") {
+          // Bar'dan giriş zarı: beyaz için 24-idx, siyah için idx+1
+          step = boardState.currentPlayer === Player.WHITE ? 24 - bestIdx : bestIdx + 1;
+        } else if (boardState.currentPlayer === Player.WHITE) {
+          step = dragItem.index - bestIdx;
+        } else {
+          step = bestIdx - dragItem.index;
+        }
 
         // Server'a gönder (state server'dan gelecek)
         gameRef.current.applyMove(dragItem.index, bestIdx, step);
@@ -554,12 +587,30 @@ const GameScene = ({ isInteractive }) => {
           ))}
 
           {/* Bar checkers */}
-          {Array.from({ length: boardState.whiteBar }).map((_, i) => (
-              <Checker key={`wb-${i}`} color={Player.WHITE} position={getBarPosition(Player.WHITE, i)} isTopStack={false} />
-          ))}
-          {Array.from({ length: boardState.blackBar }).map((_, i) => (
-              <Checker key={`bb-${i}`} color={Player.BLACK} position={getBarPosition(Player.BLACK, i)} isTopStack={false} />
-          ))}
+          {Array.from({ length: boardState.whiteBar }).map((_, i) => {
+            const isTop = i === boardState.whiteBar - 1;
+            return (
+                <Checker
+                    key={`wb-${i}`}
+                    color={Player.WHITE}
+                    position={getBarPosition(Player.WHITE, i)}
+                    isTopStack={isTop}
+                    onDragStart={isTop ? () => onBarDragStart(Player.WHITE) : undefined}
+                />
+            );
+          })}
+          {Array.from({ length: boardState.blackBar }).map((_, i) => {
+            const isTop = i === boardState.blackBar - 1;
+            return (
+                <Checker
+                    key={`bb-${i}`}
+                    color={Player.BLACK}
+                    position={getBarPosition(Player.BLACK, i)}
+                    isTopStack={isTop}
+                    onDragStart={isTop ? () => onBarDragStart(Player.BLACK) : undefined}
+                />
+            );
+          })}
 
           {/* Off checkers */}
           {Array.from({ length: boardState.whiteOff }).map((_, i) => (
